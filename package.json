@@ -1,0 +1,15 @@
+{
+  "name": "@ivyparc/leaderboard-react",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./react/src/index.js",
+  "exports": {
+    ".": "./react/src/index.js",
+    "./styles.css": "./react/src/styles.css"
+  },
+  "peerDependencies": {
+    "react": ">=18",
+    "react-dom": ">=18"
+  }
+}
