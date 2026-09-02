@@ -7,6 +7,9 @@ export { Leaderboard } from "./Leaderboard.jsx";
 export { useLeaderboard } from "./useLeaderboard.js";
 export {
   flagEmoji,
+  formatDurationScore,
   formatLeaderboardScore,
+  isBetterScore,
   monthlyPeriod,
+  normalizeScoreOrder,
 } from "./utils.js";

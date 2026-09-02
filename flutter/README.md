@@ -10,6 +10,11 @@ Drop-in monthly leaderboard for Flutter apps and games using Supabase.
 - Ranking, flag, name, and formatted score.
 - Current-player rank above the Top list.
 - Editable unique names with a replaceable profanity policy.
+- Higher-score and lower-score ranking modes.
+- Multiple boards inside one app through `scope`.
+- Custom score formatting, including duration scores like `03:51`.
+- Optional server endpoint mode for apps that should not talk to Supabase
+  directly.
 - Score tie-breaker: most recently achieved score ranks first.
 - 45-second cache and one-minute refresh cooldown.
 - UI widget and data client can be used independently.
@@ -39,6 +44,7 @@ final leaderboard = LeaderboardClient(
     supabaseAnonKey: const String.fromEnvironment('SUPABASE_ANON_KEY'),
     table: 'app_leaderboard_scores',
     namespace: 'my-game',
+    scope: 'global',
     countryCodeResolver: () async => 'CA',
   ),
 );
@@ -46,6 +52,23 @@ final leaderboard = LeaderboardClient(
 
 Use a different `namespace` for every app or game. That keeps rankings separate
 even when all apps use the same Supabase project and table.
+Use `scope` for separate boards inside the same app.
+
+For time-attack games where a lower score is better:
+
+```dart
+final leaderboard = LeaderboardClient(
+  config: const LeaderboardConfig(
+    supabaseUrl: String.fromEnvironment('SUPABASE_URL'),
+    supabaseAnonKey: String.fromEnvironment('SUPABASE_ANON_KEY'),
+    table: 'app_leaderboard_scores',
+    namespace: 'subway-master',
+    scope: 'toronto-line-1',
+    scoreOrder: LeaderboardScoreOrder.lower,
+    activationScore: null,
+  ),
+);
+```
 
 ## 4. Add the screen
 
@@ -53,7 +76,11 @@ even when all apps use the same Supabase project and table.
 Navigator.push(
   context,
   MaterialPageRoute(
-    builder: (_) => LeaderboardView(client: leaderboard),
+    builder: (_) => LeaderboardView(
+      client: leaderboard,
+      scoreLabel: 'Time',
+      scoreFormatter: formatDurationScore,
+    ),
   ),
 );
 ```
@@ -81,6 +108,29 @@ flutter run \
 
 The anon key is intended for client use. Database permissions must still be
 controlled with Supabase RLS policies.
+
+## Server endpoint mode
+
+If a production app should use your own server API instead of direct Supabase
+access, configure `endpoint`:
+
+```dart
+final leaderboard = LeaderboardClient(
+  config: const LeaderboardConfig(
+    endpoint: 'https://example.com/api/leaderboard',
+    table: 'app_leaderboard_scores',
+    namespace: 'my-game',
+    scope: 'global',
+  ),
+);
+```
+
+The endpoint should accept:
+
+- `GET ?namespace=&scope=&playerId=&limit=` and return `{ entries, currentPlayer }`
+  or `{ entries, playerEntry }`.
+- `POST` with `{ namespace, scope, playerId, playerName, score, countryCode }`.
+- `PATCH` with `{ namespace, scope, playerId, playerName }`.
 
 ## Important security boundary
 

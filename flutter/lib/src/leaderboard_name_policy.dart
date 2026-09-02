@@ -12,9 +12,8 @@ class LeaderboardNamePolicy {
     if (compact.isEmpty) {
       throw const FormatException('Name cannot be empty.');
     }
-    final name = compact.length <= maxLength
-        ? compact
-        : compact.substring(0, maxLength);
+    final name =
+        compact.length <= maxLength ? compact : compact.substring(0, maxLength);
     if (isBlocked(name)) {
       throw const FormatException('Please choose another name.');
     }
@@ -23,9 +22,9 @@ class LeaderboardNamePolicy {
 
   bool isBlocked(String name) {
     final normalized = name.toLowerCase().replaceAll(
-      RegExp(r'[\s_\-.,!@#$%^&*()[\]{}:;`~+=|\\/<>?]+'),
-      '',
-    );
+          RegExp(r'[\s_\-.,!@#$%^&*()[\]{}:;`~+=|\\/<>?]+'),
+          '',
+        );
     final leet = normalized
         .replaceAll('0', 'o')
         .replaceAll('1', 'i')

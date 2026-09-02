@@ -13,10 +13,10 @@ class LeaderboardClient {
     LeaderboardStorage? storage,
     LeaderboardNamePolicy? namePolicy,
     http.Client? httpClient,
-  }) : storage = storage ?? const SharedPreferencesLeaderboardStorage(),
-       namePolicy =
-           namePolicy ?? LeaderboardNamePolicy(maxLength: config.nameMaxLength),
-       _httpClient = httpClient ?? http.Client();
+  })  : storage = storage ?? const SharedPreferencesLeaderboardStorage(),
+        namePolicy = namePolicy ??
+            LeaderboardNamePolicy(maxLength: config.nameMaxLength),
+        _httpClient = httpClient ?? http.Client();
 
   final LeaderboardConfig config;
   final LeaderboardStorage storage;
@@ -27,15 +27,25 @@ class LeaderboardClient {
   DateTime? _cachedAt;
   String? _cachedPeriod;
 
-  String get _playerIdKey => '${config.namespace}.leaderboard.playerId.v1';
-  String get _playerNameKey => '${config.namespace}.leaderboard.playerName.v1';
+  String get _playerIdKey =>
+      '${config.namespace}.${config.scope}.leaderboard.playerId.v1';
+  String get _playerNameKey =>
+      '${config.namespace}.${config.scope}.leaderboard.playerName.v1';
+  String get _legacyPlayerIdKey =>
+      '${config.namespace}.leaderboard.playerId.v1';
+  String get _legacyPlayerNameKey =>
+      '${config.namespace}.leaderboard.playerName.v1';
   String get currentPeriod => config.periodResolver(DateTime.now());
 
   Map<String, String> get _headers => {
-    'apikey': config.supabaseAnonKey,
-    'Authorization': 'Bearer ${config.supabaseAnonKey}',
-    'Content-Type': 'application/json',
-  };
+        'apikey': config.requiredAnonKey,
+        'Authorization': 'Bearer ${config.requiredAnonKey}',
+        'Content-Type': 'application/json',
+      };
+
+  Map<String, String> get _endpointHeaders => {
+        'Content-Type': 'application/json',
+      };
 
   Uri _tableUri([Map<String, String>? query]) {
     return Uri.parse(
@@ -43,9 +53,23 @@ class LeaderboardClient {
     ).replace(queryParameters: query);
   }
 
+  Uri _endpointUri([Map<String, String>? query]) {
+    if (config.endpoint == null || config.endpoint!.trim().isEmpty) {
+      throw const LeaderboardConfigException('endpoint is not configured.');
+    }
+    return Uri.parse(config.endpoint!).replace(queryParameters: query);
+  }
+
   Future<String> getOrCreatePlayerId() async {
     final saved = await storage.read(_playerIdKey);
     if (saved != null && saved.isNotEmpty) return saved;
+    final legacy = config.scope == 'default'
+        ? await storage.read(_legacyPlayerIdKey)
+        : null;
+    if (legacy != null && legacy.isNotEmpty) {
+      await storage.write(_playerIdKey, legacy);
+      return legacy;
+    }
     final id = createAnonymousPlayerId();
     await storage.write(_playerIdKey, id);
     return id;
@@ -54,6 +78,14 @@ class LeaderboardClient {
   Future<String> getOrCreatePlayerName() async {
     final saved = await storage.read(_playerNameKey);
     if (saved != null && saved.trim().isNotEmpty) return saved.trim();
+    final legacy = config.scope == 'default'
+        ? await storage.read(_legacyPlayerNameKey)
+        : null;
+    if (legacy != null && legacy.trim().isNotEmpty) {
+      final name = legacy.trim();
+      await storage.write(_playerNameKey, name);
+      return name;
+    }
     final id = await getOrCreatePlayerId();
     final name =
         'Player-${id.replaceAll('-', '').substring(0, 4).toUpperCase()}';
@@ -66,36 +98,61 @@ class LeaderboardClient {
   }
 
   Future<void> activateCurrentPeriod() async {
+    if (config.activationScore == null) return;
+
+    if (config.usesEndpoint) {
+      await _requestEndpointJson(
+        method: 'POST',
+        body: {
+          'countryCode': await resolveCountryCode(),
+          'namespace': config.namespace,
+          'playerId': await getOrCreatePlayerId(),
+          'playerName': await getOrCreatePlayerName(),
+          'score': config.activationScore,
+          'scope': config.scope,
+        },
+      );
+      invalidateCache();
+      return;
+    }
+
     final playerId = await getOrCreatePlayerId();
     final rows = await _requestList(
       _tableUri({
         'select': 'player_id',
         'app_id': 'eq.${config.namespace}',
+        'scope': 'eq.${config.scope}',
         'player_id': 'eq.$playerId',
         'period': 'eq.$currentPeriod',
         'limit': '1',
       }),
     );
     if (rows.isNotEmpty) return;
-    await _upsert(score: 0);
+    await _upsert(score: config.activationScore!);
   }
 
   Future<void> submitScore(int totalScore) async {
     if (totalScore < 0) {
       throw const LeaderboardException('Score cannot be negative.');
     }
+    if (config.usesEndpoint) {
+      await _upsert(score: totalScore);
+      return;
+    }
+
     final playerId = await getOrCreatePlayerId();
     final rows = await _requestList(
       _tableUri({
         'select': 'score',
         'app_id': 'eq.${config.namespace}',
+        'scope': 'eq.${config.scope}',
         'player_id': 'eq.$playerId',
         'period': 'eq.$currentPeriod',
         'limit': '1',
       }),
     );
     final previous = rows.isEmpty ? null : rows.first['score'] as num?;
-    if (previous != null && previous >= totalScore) return;
+    if (!config.isBetterScore(totalScore, previous)) return;
     await _upsert(score: totalScore);
   }
 
@@ -108,10 +165,28 @@ class LeaderboardClient {
     }
 
     final playerId = await getOrCreatePlayerId();
+
+    if (config.usesEndpoint) {
+      final payload = await _requestEndpointJson(
+        method: 'PATCH',
+        body: {
+          'namespace': config.namespace,
+          'playerId': playerId,
+          'playerName': name,
+          'scope': config.scope,
+        },
+      );
+      final savedName = payload?['playerName'] as String? ?? name;
+      await storage.write(_playerNameKey, savedName);
+      invalidateCache();
+      return savedName;
+    }
+
     final rows = await _requestList(
       _tableUri({
         'select': 'player_id,name',
         'app_id': 'eq.${config.namespace}',
+        'scope': 'eq.${config.scope}',
         'period': 'eq.$currentPeriod',
         'name': 'ilike.${_escapeFilter(name)}',
         'limit': '2',
@@ -128,6 +203,7 @@ class LeaderboardClient {
         .patch(
           _tableUri({
             'app_id': 'eq.${config.namespace}',
+            'scope': 'eq.${config.scope}',
             'player_id': 'eq.$playerId',
             'period': 'eq.$currentPeriod',
           }),
@@ -144,6 +220,10 @@ class LeaderboardClient {
   }
 
   Future<LeaderboardSnapshot> fetchSnapshot({bool forceRefresh = false}) async {
+    if (config.usesEndpoint) {
+      return _fetchEndpointSnapshot(forceRefresh: forceRefresh);
+    }
+
     if (!forceRefresh &&
         _cachedSnapshot != null &&
         _cachedPeriod == currentPeriod &&
@@ -156,8 +236,10 @@ class LeaderboardClient {
       _tableUri({
         'select': 'player_id,name,score,country_code,updated_at',
         'app_id': 'eq.${config.namespace}',
+        'scope': 'eq.${config.scope}',
         'period': 'eq.$currentPeriod',
-        'order': 'score.desc,updated_at.desc',
+        'order':
+            'score.${config.scoreOrder == LeaderboardScoreOrder.lower ? 'asc' : 'desc'},updated_at.desc',
         'limit': '${config.rankScanLimit}',
       }),
     );
@@ -166,9 +248,8 @@ class LeaderboardClient {
         LeaderboardEntry.fromJson(rows[index], rank: index + 1),
     ];
     final playerId = await getOrCreatePlayerId();
-    final current = ranked
-        .where((entry) => entry.playerId == playerId)
-        .firstOrNull;
+    final current =
+        ranked.where((entry) => entry.playerId == playerId).firstOrNull;
     final snapshot = LeaderboardSnapshot(
       entries: ranked.take(config.topLimit).toList(growable: false),
       currentPlayer: current,
@@ -186,15 +267,32 @@ class LeaderboardClient {
   }
 
   Future<void> _upsert({required int score}) async {
+    if (config.usesEndpoint) {
+      await _requestEndpointJson(
+        method: 'POST',
+        body: {
+          'countryCode': await resolveCountryCode(),
+          'namespace': config.namespace,
+          'playerId': await getOrCreatePlayerId(),
+          'playerName': await getOrCreatePlayerName(),
+          'score': score,
+          'scope': config.scope,
+        },
+      );
+      invalidateCache();
+      return;
+    }
+
     final response = await _httpClient
         .post(
-          _tableUri({'on_conflict': 'app_id,player_id,period'}),
+          _tableUri({'on_conflict': 'app_id,scope,player_id,period'}),
           headers: {
             ..._headers,
             'Prefer': 'resolution=merge-duplicates,return=minimal',
           },
           body: jsonEncode({
             'app_id': config.namespace,
+            'scope': config.scope,
             'player_id': await getOrCreatePlayerId(),
             'name': await getOrCreatePlayerName(),
             'country_code': await resolveCountryCode(),
@@ -218,6 +316,77 @@ class LeaderboardClient {
       throw const LeaderboardException('Leaderboard returned invalid data.');
     }
     return decoded.cast<Map<String, dynamic>>();
+  }
+
+  Future<Map<String, dynamic>?> _requestEndpointJson({
+    required String method,
+    Map<String, String>? query,
+    Map<String, dynamic>? body,
+  }) async {
+    final uri = _endpointUri(query);
+    final encodedBody = body == null ? null : jsonEncode(body);
+    final response = switch (method) {
+      'GET' => await _httpClient
+          .get(uri, headers: _endpointHeaders)
+          .timeout(config.requestTimeout),
+      'PATCH' => await _httpClient
+          .patch(uri, headers: _endpointHeaders, body: encodedBody)
+          .timeout(config.requestTimeout),
+      'POST' => await _httpClient
+          .post(uri, headers: _endpointHeaders, body: encodedBody)
+          .timeout(config.requestTimeout),
+      _ => throw LeaderboardException('Unsupported endpoint method: $method.'),
+    };
+    _requireSuccess(response);
+    if (response.body.trim().isEmpty) return null;
+    final decoded = jsonDecode(response.body);
+    if (decoded is! Map<String, dynamic>) {
+      throw const LeaderboardException('Leaderboard returned invalid data.');
+    }
+    return decoded;
+  }
+
+  Future<LeaderboardSnapshot> _fetchEndpointSnapshot({
+    bool forceRefresh = false,
+  }) async {
+    if (!forceRefresh &&
+        _cachedSnapshot != null &&
+        _cachedPeriod == currentPeriod &&
+        _cachedAt != null &&
+        DateTime.now().difference(_cachedAt!) < config.cacheDuration) {
+      return _cachedSnapshot!;
+    }
+
+    final payload = await _requestEndpointJson(
+      method: 'GET',
+      query: {
+        'limit': '${config.topLimit}',
+        'namespace': config.namespace,
+        'playerId': await getOrCreatePlayerId(),
+        'scope': config.scope,
+      },
+    );
+    final entriesJson = payload?['entries'];
+    if (entriesJson is! List) {
+      throw const LeaderboardException('Leaderboard returned invalid data.');
+    }
+    final entries = [
+      for (final entry in entriesJson)
+        if (entry is Map<String, dynamic>)
+          LeaderboardEntry.fromEndpointJson(entry),
+    ];
+    final currentJson = payload?['currentPlayer'] ?? payload?['playerEntry'];
+    final currentPlayer = currentJson is Map<String, dynamic>
+        ? LeaderboardEntry.fromEndpointJson(currentJson)
+        : null;
+    final snapshot = LeaderboardSnapshot(
+      entries: entries,
+      currentPlayer: currentPlayer,
+    );
+    _cachedSnapshot = snapshot;
+    _cachedAt = DateTime.now();
+    _cachedPeriod = currentPeriod;
+    return snapshot;
   }
 
   void _requireSuccess(http.Response response) {

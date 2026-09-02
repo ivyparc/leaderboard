@@ -24,7 +24,11 @@ The `namespace` value keeps each app's leaderboard data separate.
 - Current-player rank displayed separately above the Top list.
 - Unique player names per app and month.
 - Replaceable profanity filter.
-- Higher scores rank first.
+- Higher-score and lower-score ranking modes.
+- Multiple boards inside one app through `scope`.
+- Custom score formatting, including duration scores like `03:51`.
+- Optional server endpoint mode for apps that should not talk to Supabase
+  directly.
 - When scores match, the most recently achieved score ranks first.
 - Cached reads and a one-minute refresh cooldown.
 - Errors are reported directly instead of being replaced with fallback data.
@@ -41,6 +45,14 @@ One table can then serve multiple apps:
 my-space-game
 my-puzzle-game
 my-web-game
+```
+
+Use `scope` when one app needs more than one board:
+
+```text
+subway-master / toronto-line-1
+subway-master / toronto-line-2
+subway-master / new-york-a
 ```
 
 ## Flutter install

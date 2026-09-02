@@ -7,6 +7,8 @@ import "./styles.css";
 export function Leaderboard({
   client,
   title = "Leaderboard",
+  scoreLabel = "Score",
+  formatScore = formatLeaderboardScore,
   onBack,
   className = "",
 }) {
@@ -89,6 +91,7 @@ export function Leaderboard({
           {snapshot.currentPlayer && (
             <Entry
               entry={snapshot.currentPlayer}
+              formatScore={formatScore}
               label="My Rank"
               highlighted
             />
@@ -97,13 +100,14 @@ export function Leaderboard({
             <span>Rank</span>
             <span aria-hidden="true" />
             <span>Name</span>
-            <span>Score</span>
+            <span>{scoreLabel}</span>
           </div>
           <div className="leaderboard__list">
             {snapshot.entries.map((entry) => (
               <Entry
                 key={entry.playerId}
                 entry={entry}
+                formatScore={formatScore}
                 highlighted={entry.rank <= 3}
               />
             ))}
@@ -135,7 +139,12 @@ export function Leaderboard({
   );
 }
 
-function Entry({ entry, highlighted = false, label }) {
+function Entry({
+  entry,
+  formatScore = formatLeaderboardScore,
+  highlighted = false,
+  label,
+}) {
   return (
     <article
       className={`leaderboard__entry ${highlighted ? "is-highlighted" : ""}`}
@@ -148,7 +157,7 @@ function Entry({ entry, highlighted = false, label }) {
         </span>
         <strong className="leaderboard__player-name">{entry.name}</strong>
         <strong className="leaderboard__score">
-          {formatLeaderboardScore(entry.score)}
+          {formatScore(entry.score)}
         </strong>
       </div>
     </article>

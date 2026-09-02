@@ -1,12 +1,19 @@
 typedef CountryCodeResolver = Future<String?> Function();
 typedef PeriodResolver = String Function(DateTime now);
+typedef LeaderboardScoreFormatter = String Function(int score);
+
+enum LeaderboardScoreOrder { higher, lower }
 
 class LeaderboardConfig {
   const LeaderboardConfig({
-    required this.supabaseUrl,
-    required this.supabaseAnonKey,
+    this.endpoint,
+    this.supabaseUrl,
+    this.supabaseAnonKey,
     required this.table,
     required this.namespace,
+    this.scope = 'default',
+    this.scoreOrder = LeaderboardScoreOrder.higher,
+    this.activationScore = 0,
     this.topLimit = 100,
     this.rankScanLimit = 500,
     this.nameMaxLength = 16,
@@ -17,10 +24,14 @@ class LeaderboardConfig {
     this.periodResolver = monthlyPeriod,
   });
 
-  final String supabaseUrl;
-  final String supabaseAnonKey;
+  final String? endpoint;
+  final String? supabaseUrl;
+  final String? supabaseAnonKey;
   final String table;
   final String namespace;
+  final String scope;
+  final LeaderboardScoreOrder scoreOrder;
+  final int? activationScore;
   final int topLimit;
   final int rankScanLimit;
   final int nameMaxLength;
@@ -31,9 +42,32 @@ class LeaderboardConfig {
   final PeriodResolver periodResolver;
 
   String get projectUrl {
-    var value = supabaseUrl.trim();
+    if (supabaseUrl == null || supabaseUrl!.trim().isEmpty) {
+      throw const LeaderboardConfigException(
+        'supabaseUrl is required when endpoint is not configured.',
+      );
+    }
+    var value = supabaseUrl!.trim();
     value = value.replaceFirst(RegExp(r'/rest/v1/?$'), '');
     return value.replaceFirst(RegExp(r'/$'), '');
+  }
+
+  String get requiredAnonKey {
+    if (supabaseAnonKey == null || supabaseAnonKey!.trim().isEmpty) {
+      throw const LeaderboardConfigException(
+        'supabaseAnonKey is required when endpoint is not configured.',
+      );
+    }
+    return supabaseAnonKey!;
+  }
+
+  bool get usesEndpoint => endpoint != null && endpoint!.trim().isNotEmpty;
+
+  bool isBetterScore(int nextScore, num? previousScore) {
+    if (previousScore == null) return true;
+    return scoreOrder == LeaderboardScoreOrder.lower
+        ? nextScore < previousScore
+        : nextScore > previousScore;
   }
 
   static String monthlyPeriod(DateTime now) {
@@ -43,3 +77,24 @@ class LeaderboardConfig {
 }
 
 String monthlyPeriod(DateTime now) => LeaderboardConfig.monthlyPeriod(now);
+
+class LeaderboardConfigException implements Exception {
+  const LeaderboardConfigException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
+String formatLeaderboardScore(int score) => score.toString().replaceAllMapped(
+      RegExp(r'\B(?=(\d{3})+(?!\d))'),
+      (_) => ',',
+    );
+
+String formatDurationScore(int totalSeconds) {
+  final seconds = totalSeconds < 0 ? 0 : totalSeconds;
+  final minutes = seconds ~/ 60;
+  final remainder = seconds % 60;
+  return '${minutes.toString().padLeft(2, '0')}:${remainder.toString().padLeft(2, '0')}';
+}

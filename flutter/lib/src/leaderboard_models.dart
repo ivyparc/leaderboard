@@ -28,8 +28,29 @@ class LeaderboardEntry {
       score: (json['score'] as num?)?.round() ?? 0,
       updatedAt:
           DateTime.tryParse(json['updated_at'] as String? ?? '')?.toUtc() ??
-          DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+              DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
       countryCode: normalizeCountryCode(json['country_code'] as String?),
+    );
+  }
+
+  factory LeaderboardEntry.fromEndpointJson(Map<String, dynamic> json) {
+    final rawName = json['name'] ?? json['playerName'] ?? json['player_name'];
+    final rawPlayerId = json['playerId'] ?? json['player_id'];
+    final rawScore = json['score'] ?? json['elapsedSeconds'];
+    final rawCountryCode = json['countryCode'] ?? json['country_code'];
+    final rawUpdatedAt =
+        json['updatedAt'] ?? json['updated_at'] ?? json['submittedAt'];
+
+    return LeaderboardEntry(
+      rank: (json['rank'] as num?)?.round() ?? 0,
+      playerId: rawPlayerId as String? ?? '',
+      name: rawName is String && rawName.trim().isNotEmpty
+          ? rawName.trim()
+          : 'Player',
+      score: (rawScore as num?)?.round() ?? 0,
+      updatedAt: DateTime.tryParse(rawUpdatedAt as String? ?? '')?.toUtc() ??
+          DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+      countryCode: normalizeCountryCode(rawCountryCode as String?),
     );
   }
 }

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'leaderboard_client.dart';
+import 'leaderboard_config.dart';
 import 'leaderboard_models.dart';
 
 class LeaderboardView extends StatefulWidget {
@@ -11,6 +12,8 @@ class LeaderboardView extends StatefulWidget {
     required this.client,
     this.title = 'Leaderboard',
     this.onBack,
+    this.scoreLabel = 'Score',
+    this.scoreFormatter = formatLeaderboardScore,
     this.backgroundColor = const Color(0xFF505050),
     this.accentColor = const Color(0xFFFFC400),
   });
@@ -18,6 +21,8 @@ class LeaderboardView extends StatefulWidget {
   final LeaderboardClient client;
   final String title;
   final VoidCallback? onBack;
+  final String scoreLabel;
+  final LeaderboardScoreFormatter scoreFormatter;
   final Color backgroundColor;
   final Color accentColor;
 
@@ -176,10 +181,11 @@ class _LeaderboardViewState extends State<LeaderboardView> {
                             entry: current,
                             label: 'My Rank',
                             accentColor: widget.accentColor,
+                            scoreFormatter: widget.scoreFormatter,
                           ),
                           const SizedBox(height: 12),
                         ],
-                        const _Header(),
+                        _Header(scoreLabel: widget.scoreLabel),
                         const SizedBox(height: 6),
                         Expanded(
                           child: ListView.separated(
@@ -189,6 +195,7 @@ class _LeaderboardViewState extends State<LeaderboardView> {
                             itemBuilder: (_, index) => _EntryRow(
                               entry: data.entries[index],
                               accentColor: widget.accentColor,
+                              scoreFormatter: widget.scoreFormatter,
                             ),
                           ),
                         ),
@@ -206,18 +213,24 @@ class _LeaderboardViewState extends State<LeaderboardView> {
 }
 
 class _Header extends StatelessWidget {
-  const _Header();
+  const _Header({required this.scoreLabel});
+
+  final String scoreLabel;
 
   @override
   Widget build(BuildContext context) {
-    return const Row(
+    return Row(
       children: [
-        SizedBox(width: 58, child: Text('Rank', style: _headerStyle)),
-        SizedBox(width: 36),
-        Expanded(child: Text('Name', style: _headerStyle)),
+        const SizedBox(width: 58, child: Text('Rank', style: _headerStyle)),
+        const SizedBox(width: 36),
+        const Expanded(child: Text('Name', style: _headerStyle)),
         SizedBox(
           width: 92,
-          child: Text('Score', textAlign: TextAlign.right, style: _headerStyle),
+          child: Text(
+            scoreLabel,
+            textAlign: TextAlign.right,
+            style: _headerStyle,
+          ),
         ),
       ],
     );
@@ -225,10 +238,16 @@ class _Header extends StatelessWidget {
 }
 
 class _EntryRow extends StatelessWidget {
-  const _EntryRow({required this.entry, required this.accentColor, this.label});
+  const _EntryRow({
+    required this.entry,
+    required this.accentColor,
+    required this.scoreFormatter,
+    this.label,
+  });
 
   final LeaderboardEntry entry;
   final Color accentColor;
+  final LeaderboardScoreFormatter scoreFormatter;
   final String? label;
 
   @override
@@ -271,7 +290,7 @@ class _EntryRow extends StatelessWidget {
               SizedBox(
                 width: 92,
                 child: Text(
-                  formatLeaderboardScore(entry.score),
+                  scoreFormatter(entry.score),
                   textAlign: TextAlign.right,
                   style: _entryStyle,
                 ),
@@ -310,13 +329,6 @@ class _Message extends StatelessWidget {
       ),
     );
   }
-}
-
-String formatLeaderboardScore(int score) {
-  return score.toString().replaceAllMapped(
-        RegExp(r'\B(?=(\d{3})+(?!\d))'),
-        (_) => ',',
-      );
 }
 
 String flagEmoji(String? countryCode) {

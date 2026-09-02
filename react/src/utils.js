@@ -4,6 +4,17 @@ export function monthlyPeriod(date = new Date()) {
   return `${year}-${month}`;
 }
 
+export function normalizeScoreOrder(order) {
+  return order === "lower" ? "lower" : "higher";
+}
+
+export function isBetterScore(nextScore, previousScore, scoreOrder = "higher") {
+  if (previousScore === null || previousScore === undefined) return true;
+  return normalizeScoreOrder(scoreOrder) === "lower"
+    ? nextScore < previousScore
+    : nextScore > previousScore;
+}
+
 export function createAnonymousPlayerId() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
   throw new Error("This browser cannot create a secure anonymous player ID.");
@@ -24,4 +35,11 @@ export function flagEmoji(countryCode) {
 
 export function formatLeaderboardScore(score) {
   return new Intl.NumberFormat("en-US").format(score);
+}
+
+export function formatDurationScore(totalSeconds) {
+  const seconds = Math.max(0, Math.round(Number(totalSeconds) || 0));
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`;
 }
