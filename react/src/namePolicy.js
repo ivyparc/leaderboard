@@ -41,7 +41,7 @@ export const DEFAULT_BLOCKED_TERMS = new Set([
 
 export function createNamePolicy({
   blockedTerms = DEFAULT_BLOCKED_TERMS,
-  maxLength = 16,
+  maxLength = 32,
 } = {}) {
   function isBlocked(name) {
     const normalized = name

@@ -2,7 +2,6 @@ import { createNamePolicy } from "./namePolicy.js";
 import {
   createAnonymousPlayerId,
   isBetterScore,
-  monthlyPeriod,
   normalizeCountryCode,
   normalizeScoreOrder,
 } from "./utils.js";
@@ -20,7 +19,6 @@ export function createLeaderboardClient({
   rankScanLimit = 500,
   cacheDurationMs = 45_000,
   requestTimeoutMs = 8_000,
-  periodResolver = monthlyPeriod,
   countryCodeResolver,
   storage = globalThis.localStorage,
   namePolicy = createNamePolicy(),
@@ -46,7 +44,6 @@ export function createLeaderboardClient({
   const playerIdKey = `${storagePrefix}.playerId.v1`;
   const playerNameKey = `${storagePrefix}.playerName.v1`;
   const legacyPlayerIdKey = `${namespace}.leaderboard.playerId.v1`;
-  const legacyPlayerNameKey = `${namespace}.leaderboard.playerName.v1`;
   let cache = null;
 
   const headers = {
@@ -55,8 +52,23 @@ export function createLeaderboardClient({
     "Content-Type": "application/json",
   };
 
-  function currentPeriod() {
-    return periodResolver(new Date());
+  async function rpc(action, params) {
+    if (endpointUrl) {
+      const payload = await requestEndpointJson({}, {
+        method: "POST", body: JSON.stringify({ action, namespace, scope, ...params }),
+      });
+      const value = payload?.[action === "leaderboard_name" ? "playerName" : "period"];
+      if (typeof value !== "string" || !value) throw new Error("Endpoint must implement name reservation and ranking periods.");
+      return value;
+    }
+    const response = await request(`${projectUrl}/rest/v1/rpc/${action}`, {
+      method: "POST", body: JSON.stringify({ p_app_id: namespace, p_scope: scope, ...params }),
+    });
+    return response.json();
+  }
+
+  async function currentPeriod() {
+    return rpc("leaderboard_period", {});
   }
 
   function tableUrl(params = {}) {
@@ -131,17 +143,10 @@ export function createLeaderboardClient({
     return id;
   }
 
-  function getOrCreatePlayerName() {
-    const saved = storage.getItem(playerNameKey)?.trim();
-    if (saved) return saved;
-    const legacy =
-      scope === "default" ? storage.getItem(legacyPlayerNameKey)?.trim() : null;
-    if (legacy) {
-      storage.setItem(playerNameKey, legacy);
-      return legacy;
-    }
-    const suffix = getOrCreatePlayerId().replaceAll("-", "").slice(0, 4);
-    const name = `Player-${suffix.toUpperCase()}`;
+  async function getOrCreatePlayerName() {
+    const name = await rpc("leaderboard_name", endpointUrl
+      ? { playerId: getOrCreatePlayerId() }
+      : { p_player_id: getOrCreatePlayerId() });
     storage.setItem(playerNameKey, name);
     return name;
   }
@@ -160,7 +165,7 @@ export function createLeaderboardClient({
             countryCode: await resolveCountryCode(),
             namespace,
             playerId: getOrCreatePlayerId(),
-            playerName: getOrCreatePlayerName(),
+            playerName: await getOrCreatePlayerName(),
             score,
             scope,
           }),
@@ -178,9 +183,9 @@ export function createLeaderboardClient({
         body: JSON.stringify({
           app_id: namespace,
           player_id: getOrCreatePlayerId(),
-          period: currentPeriod(),
+          period: await currentPeriod(),
           scope,
-          name: getOrCreatePlayerName(),
+          name: await getOrCreatePlayerName(),
           country_code: await resolveCountryCode(),
           score,
           updated_at: new Date().toISOString(),
@@ -204,7 +209,7 @@ export function createLeaderboardClient({
             countryCode: await resolveCountryCode(),
             namespace,
             playerId: getOrCreatePlayerId(),
-            playerName: getOrCreatePlayerName(),
+            playerName: await getOrCreatePlayerName(),
             score: activationScore,
             scope,
           }),
@@ -219,7 +224,7 @@ export function createLeaderboardClient({
       app_id: `eq.${namespace}`,
       scope: `eq.${scope}`,
       player_id: `eq.${getOrCreatePlayerId()}`,
-      period: `eq.${currentPeriod()}`,
+      period: `eq.${await currentPeriod()}`,
       limit: "1",
     });
     if (rows.length === 0) await upsert(activationScore);
@@ -239,7 +244,7 @@ export function createLeaderboardClient({
       app_id: `eq.${namespace}`,
       scope: `eq.${scope}`,
       player_id: `eq.${getOrCreatePlayerId()}`,
-      period: `eq.${currentPeriod()}`,
+      period: `eq.${await currentPeriod()}`,
       limit: "1",
     });
     if (!isBetterScore(totalScore, rows[0]?.score, normalizedScoreOrder)) return;
@@ -273,7 +278,7 @@ export function createLeaderboardClient({
       select: "player_id,name",
       app_id: `eq.${namespace}`,
       scope: `eq.${scope}`,
-      period: `eq.${currentPeriod()}`,
+      period: `eq.${await currentPeriod()}`,
       name: `ilike.${name}`,
       limit: "2",
     });
@@ -281,14 +286,13 @@ export function createLeaderboardClient({
       throw new Error("That name is already taken.");
     }
 
-    storage.setItem(playerNameKey, name);
     await activateCurrentPeriod();
     await request(
       tableUrl({
         app_id: `eq.${namespace}`,
         scope: `eq.${scope}`,
         player_id: `eq.${playerId}`,
-        period: `eq.${currentPeriod()}`,
+        period: `eq.${await currentPeriod()}`,
       }),
       {
         method: "PATCH",
@@ -299,6 +303,7 @@ export function createLeaderboardClient({
         }),
       },
     );
+    storage.setItem(playerNameKey, name);
     invalidateCache();
     return name;
   }
@@ -308,7 +313,7 @@ export function createLeaderboardClient({
       return fetchEndpointSnapshot({ forceRefresh });
     }
 
-    const period = currentPeriod();
+    const period = await currentPeriod();
     if (
       !forceRefresh &&
       cache?.period === period &&
@@ -343,7 +348,7 @@ export function createLeaderboardClient({
   }
 
   async function fetchEndpointSnapshot({ forceRefresh = false } = {}) {
-    const period = currentPeriod();
+    const period = await currentPeriod();
     if (
       !forceRefresh &&
       cache?.period === period &&

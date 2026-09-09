@@ -2,9 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 export function useLeaderboard(client, { refreshCooldownMs = 60_000 } = {}) {
   const [snapshot, setSnapshot] = useState(null);
-  const [playerName, setPlayerName] = useState(
-    client.getOrCreatePlayerName(),
-  );
+  const [playerName, setPlayerName] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [refreshLocked, setRefreshLocked] = useState(false);
@@ -14,6 +12,7 @@ export function useLeaderboard(client, { refreshCooldownMs = 60_000 } = {}) {
       setLoading(true);
       setError(null);
       try {
+        setPlayerName(await client.getOrCreatePlayerName());
         await client.activateCurrentPeriod();
         setSnapshot(await client.fetchSnapshot({ forceRefresh }));
       } catch (loadError) {

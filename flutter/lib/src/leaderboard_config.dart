@@ -16,7 +16,7 @@ class LeaderboardConfig {
     this.activationScore = 0,
     this.topLimit = 100,
     this.rankScanLimit = 500,
-    this.nameMaxLength = 16,
+    this.nameMaxLength = 32,
     this.cacheDuration = const Duration(seconds: 45),
     this.requestTimeout = const Duration(seconds: 8),
     this.refreshCooldown = const Duration(minutes: 1),

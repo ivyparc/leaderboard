@@ -6,7 +6,7 @@ Drop-in monthly Supabase leaderboard for React apps and browser games.
 
 - Anonymous browser player ID with no sign-up.
 - Separate rankings per app through `namespace`.
-- Monthly ranking periods.
+- Ranking periods persist until more than 1,000 participants accumulate; reset at the next UTC month boundary.
 - Ranking, flag, name, and formatted score.
 - Current-player rank above the Top list.
 - Editable unique names and replaceable profanity policy.

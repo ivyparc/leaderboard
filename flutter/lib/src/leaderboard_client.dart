@@ -33,9 +33,26 @@ class LeaderboardClient {
       '${config.namespace}.${config.scope}.leaderboard.playerName.v1';
   String get _legacyPlayerIdKey =>
       '${config.namespace}.leaderboard.playerId.v1';
-  String get _legacyPlayerNameKey =>
-      '${config.namespace}.leaderboard.playerName.v1';
-  String get currentPeriod => config.periodResolver(DateTime.now());
+  Future<String> get currentPeriod => _rpc('leaderboard_period', {});
+
+  Future<String> _rpc(String action, Map<String, dynamic> params) async {
+    if (config.usesEndpoint) {
+      final payload = await _requestEndpointJson(method: 'POST', body: {
+        'action': action, 'namespace': config.namespace, 'scope': config.scope, ...params,
+      });
+      final value = payload?[action == 'leaderboard_name' ? 'playerName' : 'period'];
+      if (value is! String || value.isEmpty) {
+        throw const LeaderboardException('Endpoint must implement name reservation and ranking periods.');
+      }
+      return value;
+    }
+    final response = await _httpClient.post(
+      Uri.parse('${config.projectUrl}/rest/v1/rpc/$action'), headers: _headers,
+      body: jsonEncode({'p_app_id': config.namespace, 'p_scope': config.scope, ...params}),
+    ).timeout(config.requestTimeout);
+    _requireSuccess(response);
+    return jsonDecode(response.body) as String;
+  }
 
   Map<String, String> get _headers => {
         'apikey': config.requiredAnonKey,
@@ -76,19 +93,9 @@ class LeaderboardClient {
   }
 
   Future<String> getOrCreatePlayerName() async {
-    final saved = await storage.read(_playerNameKey);
-    if (saved != null && saved.trim().isNotEmpty) return saved.trim();
-    final legacy = config.scope == 'default'
-        ? await storage.read(_legacyPlayerNameKey)
-        : null;
-    if (legacy != null && legacy.trim().isNotEmpty) {
-      final name = legacy.trim();
-      await storage.write(_playerNameKey, name);
-      return name;
-    }
-    final id = await getOrCreatePlayerId();
-    final name =
-        'Player-${id.replaceAll('-', '').substring(0, 4).toUpperCase()}';
+    final name = await _rpc('leaderboard_name', {
+      (config.usesEndpoint ? 'playerId' : 'p_player_id'): await getOrCreatePlayerId(),
+    });
     await storage.write(_playerNameKey, name);
     return name;
   }
@@ -123,7 +130,7 @@ class LeaderboardClient {
         'app_id': 'eq.${config.namespace}',
         'scope': 'eq.${config.scope}',
         'player_id': 'eq.$playerId',
-        'period': 'eq.$currentPeriod',
+        'period': 'eq.${await currentPeriod}',
         'limit': '1',
       }),
     );
@@ -147,7 +154,7 @@ class LeaderboardClient {
         'app_id': 'eq.${config.namespace}',
         'scope': 'eq.${config.scope}',
         'player_id': 'eq.$playerId',
-        'period': 'eq.$currentPeriod',
+        'period': 'eq.${await currentPeriod}',
         'limit': '1',
       }),
     );
@@ -187,7 +194,7 @@ class LeaderboardClient {
         'select': 'player_id,name',
         'app_id': 'eq.${config.namespace}',
         'scope': 'eq.${config.scope}',
-        'period': 'eq.$currentPeriod',
+        'period': 'eq.${await currentPeriod}',
         'name': 'ilike.${_escapeFilter(name)}',
         'limit': '2',
       }),
@@ -197,7 +204,6 @@ class LeaderboardClient {
       throw const LeaderboardNameException('That name is already taken.');
     }
 
-    await storage.write(_playerNameKey, name);
     await activateCurrentPeriod();
     final response = await _httpClient
         .patch(
@@ -205,7 +211,7 @@ class LeaderboardClient {
             'app_id': 'eq.${config.namespace}',
             'scope': 'eq.${config.scope}',
             'player_id': 'eq.$playerId',
-            'period': 'eq.$currentPeriod',
+            'period': 'eq.${await currentPeriod}',
           }),
           headers: {..._headers, 'Prefer': 'return=minimal'},
           body: jsonEncode({
@@ -215,6 +221,7 @@ class LeaderboardClient {
         )
         .timeout(config.requestTimeout);
     _requireSuccess(response);
+    await storage.write(_playerNameKey, name);
     invalidateCache();
     return name;
   }
@@ -226,7 +233,7 @@ class LeaderboardClient {
 
     if (!forceRefresh &&
         _cachedSnapshot != null &&
-        _cachedPeriod == currentPeriod &&
+        _cachedPeriod == await currentPeriod &&
         _cachedAt != null &&
         DateTime.now().difference(_cachedAt!) < config.cacheDuration) {
       return _cachedSnapshot!;
@@ -237,7 +244,7 @@ class LeaderboardClient {
         'select': 'player_id,name,score,country_code,updated_at',
         'app_id': 'eq.${config.namespace}',
         'scope': 'eq.${config.scope}',
-        'period': 'eq.$currentPeriod',
+        'period': 'eq.${await currentPeriod}',
         'order':
             'score.${config.scoreOrder == LeaderboardScoreOrder.lower ? 'asc' : 'desc'},updated_at.desc',
         'limit': '${config.rankScanLimit}',
@@ -256,7 +263,7 @@ class LeaderboardClient {
     );
     _cachedSnapshot = snapshot;
     _cachedAt = DateTime.now();
-    _cachedPeriod = currentPeriod;
+    _cachedPeriod = await currentPeriod;
     return snapshot;
   }
 
@@ -297,7 +304,7 @@ class LeaderboardClient {
             'name': await getOrCreatePlayerName(),
             'country_code': await resolveCountryCode(),
             'score': score,
-            'period': currentPeriod,
+            'period': await currentPeriod,
             'updated_at': DateTime.now().toUtc().toIso8601String(),
           }),
         )
@@ -351,7 +358,7 @@ class LeaderboardClient {
   }) async {
     if (!forceRefresh &&
         _cachedSnapshot != null &&
-        _cachedPeriod == currentPeriod &&
+        _cachedPeriod == await currentPeriod &&
         _cachedAt != null &&
         DateTime.now().difference(_cachedAt!) < config.cacheDuration) {
       return _cachedSnapshot!;
@@ -385,7 +392,7 @@ class LeaderboardClient {
     );
     _cachedSnapshot = snapshot;
     _cachedAt = DateTime.now();
-    _cachedPeriod = currentPeriod;
+    _cachedPeriod = await currentPeriod;
     return snapshot;
   }
 

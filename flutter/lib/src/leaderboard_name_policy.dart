@@ -1,7 +1,7 @@
 class LeaderboardNamePolicy {
   const LeaderboardNamePolicy({
     this.blockedTerms = defaultBlockedTerms,
-    this.maxLength = 16,
+    this.maxLength = 32,
   });
 
   final Set<String> blockedTerms;

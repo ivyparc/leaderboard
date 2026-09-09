@@ -1,12 +1,12 @@
 # Leaderboard Flutter
 
-Drop-in monthly leaderboard for Flutter apps and games using Supabase.
+Drop-in participant-threshold leaderboard for Flutter apps and games using Supabase.
 
 ## Features
 
 - Anonymous local player ID. No sign-up, Apple login, or Google login.
 - App-specific data isolation through `namespace`.
-- Monthly ranking periods.
+- Ranking periods persist until more than 1,000 participants accumulate; reset at the next UTC month boundary.
 - Ranking, flag, name, and formatted score.
 - Current-player rank above the Top list.
 - Editable unique names with a replaceable profanity policy.

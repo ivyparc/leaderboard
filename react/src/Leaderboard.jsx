@@ -121,7 +121,7 @@ export function Leaderboard({
             <h2>Edit Name</h2>
             <input
               autoFocus
-              maxLength={16}
+              maxLength={32}
               value={draftName}
               onChange={(event) => setDraftName(event.target.value)}
             />
