@@ -168,7 +168,7 @@ class _LeaderboardViewState extends State<LeaderboardView> {
                       );
                     }
                     final data = snapshot.data ?? const LeaderboardSnapshot();
-                    if (data.entries.isEmpty && data.currentPlayer == null) {
+                    if (data.entries.isEmpty && data.currentPlayer == null && data.previousScore == null) {
                       return const _Message(
                         title: 'No scores yet',
                         body: 'Play once to enter this period ranking.',
@@ -179,12 +179,16 @@ class _LeaderboardViewState extends State<LeaderboardView> {
                         if (data.currentPlayer case final current?) ...[
                           _EntryRow(
                             entry: current,
-                            label: 'My Rank',
+                            label: 'Your Rank',
+                            previousScore: data.showPrevious ? data.previousScore : null,
                             accentColor: widget.accentColor,
                             scoreFormatter: widget.scoreFormatter,
                           ),
                           const SizedBox(height: 12),
                         ],
+                        if (data.currentPlayer == null && data.previousScore != null)
+                          _EntryRow(entry: LeaderboardEntry(rank: 0, playerId: '', name: _name ?? 'Player', score: data.previousScore!, updatedAt: DateTime.now()),
+                            hideRank: true, label: 'Your Previous Record', accentColor: widget.accentColor, scoreFormatter: widget.scoreFormatter),
                         _Header(scoreLabel: widget.scoreLabel),
                         const SizedBox(height: 6),
                         Expanded(
@@ -243,12 +247,16 @@ class _EntryRow extends StatelessWidget {
     required this.accentColor,
     required this.scoreFormatter,
     this.label,
+    this.hideRank = false,
+    this.previousScore,
   });
 
   final LeaderboardEntry entry;
   final Color accentColor;
   final LeaderboardScoreFormatter scoreFormatter;
   final String? label;
+  final bool hideRank;
+  final int? previousScore;
 
   @override
   Widget build(BuildContext context) {
@@ -270,7 +278,7 @@ class _EntryRow extends StatelessWidget {
             children: [
               SizedBox(
                 width: 58,
-                child: Text('#${entry.rank}', style: _entryStyle),
+                child: Text(hideRank ? '' : '#${entry.rank}', style: _entryStyle),
               ),
               SizedBox(
                 width: 36,
@@ -297,6 +305,7 @@ class _EntryRow extends StatelessWidget {
               ),
             ],
           ),
+          if (previousScore != null) Text('Previous: ${scoreFormatter(previousScore!)}', style: const TextStyle(fontSize: 12)),
         ],
       ),
     );

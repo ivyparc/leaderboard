@@ -19,7 +19,7 @@ The `namespace` value keeps each app's leaderboard data separate.
 ## Included behavior
 
 - Anonymous local player ID without sign-up or social login.
-- Ranking periods persist until more than 1,000 participants accumulate; reset at the next UTC month boundary.
+- Rankings reset at every UTC month boundary, regardless of participant count.
 - Ranking, country flag, editable name, and formatted score.
 - Current-player rank displayed separately above the Top list.
 - Reserved, case-insensitive unique player names per app and scope across periods.
@@ -90,12 +90,32 @@ for casual games, prototypes, and low-stakes leaderboards. Competitive or
 prize-based games should validate score submissions in a trusted server or
 Supabase Edge Function.
 
-## Username and period migration
+## Monthly reset migration
 
-Apply either updated `supabase/leaderboard.sql` before updating clients. Both
-copies are identical. Existing scores and player IDs are retained. The latest
-existing period becomes each board's initial active period; previously separated
-monthly history is not merged. Do not run the old monthly deletion job.
+Apply `react/supabase/leaderboard.sql` (identical to the Flutter copy), then enable
+Supabase Cron and run `react/supabase/monthly-cron.sql`. The cron job is required
+so expired scores are deleted even with no connected clients. Check the job's run
+history after deployment. The period RPC also purges expired scores on access;
+RLS immediately hides them at the UTC boundary. There is no score archive.
+
+Only gameplay completed after reset may be submitted. Pass `completedAt` when
+submitting a delayed result (React: `submitScore(score, {completedAt})`; Flutter:
+`submitScore(score, completedAt: completedAt)`). Capture it at gameplay completion. Never pass an all-time
+best or replay an offline result from an earlier month to `submitScore`.
+`activateCurrentPeriod` is now read-only, including when activationScore is set.
+Opening the board or editing a name does not register a score.
+
+The clients retain a private personal comparison in local storage (one previous
+best plus the current period best), never upload it, and never add it to Top rows.
+After reset, the personal card says **Your Previous Record** and has no rank.
+A new worse result shows its current rank and **Previous: old score** below it;
+a better or equal result shows only the current result. Both score orders work.
+This requires the record to have been observed/submitted by the updated client
+before reset. A new device cannot retrieve deleted records from the server.
+
+Names remain reserved separately across resets. Migration deletes historical
+score rows; deploy it before the updated clients. Do not restore an old SQL copy
+that retains historical score rows or the former participant threshold behavior.
 
 New names are reserved in PostgreSQL using column A + column B + two digits
 (`00`–`99`) from [the supplied word list](https://docs.google.com/spreadsheets/d/1rWnv_2oI662TNBFDXsbGGtDg_PWXUxNPeYjME_TCSSM/edit?gid=1764333573).
@@ -105,30 +125,18 @@ arrays and deploying the migration. Names support up to 32 characters to avoid
 truncating longer combinations. Generation checks availability before reserving;
 a case-insensitive unique index also prevents concurrent duplicate reservations.
 Names remain reserved across resets. Historical duplicate names across months
-are resolved on the affected player's next name request; historical scores stay intact.
+are resolved on the affected player's next name request; historical score rows are deleted by the monthly reset migration.
 
-Each `(namespace, scope)` counts unique participants in its active period, including
-players registered with `activationScore`. Exactly 1,000 does not reset. Participant
-1,001 schedules the next UTC month boundary. The first request on/after that
-boundary switches to a new empty period; no cron or deletion is needed. Old scores
-remain available for later administration. In-flight writes using an expired period
-fail explicitly and require a refresh. Existing boards already over the threshold
-schedule the next month boundary when first accessed after migration.
-
-React `currentPeriod()` and `getOrCreatePlayerName()` now return promises. Flutter
-`currentPeriod` returns `Future<String>`. Calendar `periodResolver` is no longer
-used to choose database periods (Flutter retains the config field for source
-compatibility). The shared RPCs target `app_leaderboard_scores`; custom score table
-installations must adapt the SQL and RPCs together.
-
-Custom endpoint servers must implement these POST actions before using the updated
-clients (server implementation is outside this repository):
+Custom endpoint servers must implement period and name reservation actions:
 
 - `{action: "leaderboard_period", namespace, scope}` → `{period: "YYYY-MM"}`.
 - `{action: "leaderboard_name", namespace, scope, playerId}` → `{playerName: "AzureBison53"}`.
 
-Use the corresponding Supabase RPCs and the same active period for all endpoint
-reads/writes. PATCH name changes must update the name reservation atomically.
+Score POSTs include `period`; reject expired periods rather than assigning an old
+submission to a new month. Read/write only the active month, delete expired rows,
+and update name reservations atomically on PATCH. The endpoint implementation is
+outside this repository. Anonymous clients are not authoritative proof of when
+gameplay occurred; competitive games need server-validated gameplay sessions.
 
 ## Future administrator page
 

@@ -1,12 +1,12 @@
 # Leaderboard Flutter
 
-Drop-in participant-threshold leaderboard for Flutter apps and games using Supabase.
+Drop-in monthly leaderboard for Flutter apps and games using Supabase.
 
 ## Features
 
 - Anonymous local player ID. No sign-up, Apple login, or Google login.
 - App-specific data isolation through `namespace`.
-- Ranking periods persist until more than 1,000 participants accumulate; reset at the next UTC month boundary.
+- Rankings reset every UTC month and expired scores are deleted.
 - Ranking, flag, name, and formatted score.
 - Current-player rank above the Top list.
 - Editable unique names with a replaceable profanity policy.
@@ -138,3 +138,10 @@ This lightweight module trusts scores sent by the client. That is suitable for
 small casual games, prototypes, and low-stakes leaderboards. Competitive or
 prize-based games should submit scores through a trusted server or Edge
 Function that validates gameplay.
+
+## Monthly reset policy
+
+See the root README's monthly reset migration. Every UTC month starts empty.
+Activation never registers a score. Submit only a new gameplay result, not a saved
+all-time best. Previous is a private local comparison, with no public rank until
+new gameplay. Apply the updated SQL and monthly-cron.sql before deployment.

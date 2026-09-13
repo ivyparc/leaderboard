@@ -92,9 +92,14 @@ export function Leaderboard({
             <Entry
               entry={snapshot.currentPlayer}
               formatScore={formatScore}
-              label="My Rank"
+              label="Your Rank"
+              previousScore={snapshot.showPrevious ? snapshot.previousScore : null}
               highlighted
             />
+          )}
+          {!snapshot.currentPlayer && snapshot.previousScore !== null && (
+            <Entry entry={{ rank: null, name: playerName, score: snapshot.previousScore }}
+              label="Your Previous Record" formatScore={formatScore} highlighted />
           )}
           <div className="leaderboard__header leaderboard__grid">
             <span>Rank</span>
@@ -144,6 +149,7 @@ function Entry({
   formatScore = formatLeaderboardScore,
   highlighted = false,
   label,
+  previousScore = null,
 }) {
   return (
     <article
@@ -151,7 +157,7 @@ function Entry({
     >
       {label && <strong className="leaderboard__entry-label">{label}</strong>}
       <div className="leaderboard__grid">
-        <strong>#{entry.rank}</strong>
+        <strong>{entry.rank == null ? "" : `#${entry.rank}`}</strong>
         <span className="leaderboard__flag">
           {flagEmoji(entry.countryCode)}
         </span>
@@ -160,6 +166,7 @@ function Entry({
           {formatScore(entry.score)}
         </strong>
       </div>
+      {previousScore !== null && <small>Previous: {formatScore(previousScore)}</small>}
     </article>
   );
 }

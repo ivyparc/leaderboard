@@ -6,7 +6,7 @@ Drop-in monthly Supabase leaderboard for React apps and browser games.
 
 - Anonymous browser player ID with no sign-up.
 - Separate rankings per app through `namespace`.
-- Ranking periods persist until more than 1,000 participants accumulate; reset at the next UTC month boundary.
+- Rankings reset every UTC month and expired scores are deleted.
 - Ranking, flag, name, and formatted score.
 - Current-player rank above the Top list.
 - Editable unique names and replaceable profanity policy.
@@ -146,3 +146,10 @@ database access control.
 This module accepts scores from the client. Use it for low-stakes games and
 prototypes. Prize-based or competitive games should validate score submissions
 in a trusted server or Supabase Edge Function.
+
+## Monthly reset policy
+
+See the root README's monthly reset migration. Every UTC month starts empty.
+Activation never registers a score. Submit only a new gameplay result, not a saved
+all-time best. Previous is a private local comparison, with no public rank until
+new gameplay. Apply the updated SQL and monthly-cron.sql before deployment.

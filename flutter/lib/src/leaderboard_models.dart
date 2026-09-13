@@ -56,10 +56,12 @@ class LeaderboardEntry {
 }
 
 class LeaderboardSnapshot {
-  const LeaderboardSnapshot({this.entries = const [], this.currentPlayer});
+  const LeaderboardSnapshot({this.entries = const [], this.currentPlayer, this.previousScore, this.showPrevious = false});
 
   final List<LeaderboardEntry> entries;
   final LeaderboardEntry? currentPlayer;
+  final int? previousScore;
+  final bool showPrevious;
 }
 
 class LeaderboardException implements Exception {

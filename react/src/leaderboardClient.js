@@ -155,13 +155,14 @@ export function createLeaderboardClient({
     return normalizeCountryCode(await countryCodeResolver?.());
   }
 
-  async function upsert(score) {
+  async function upsert(score, period) {
     if (endpointUrl) {
       await requestEndpointJson(
         {},
         {
           method: "POST",
           body: JSON.stringify({
+            period,
             countryCode: await resolveCountryCode(),
             namespace,
             playerId: getOrCreatePlayerId(),
@@ -183,7 +184,7 @@ export function createLeaderboardClient({
         body: JSON.stringify({
           app_id: namespace,
           player_id: getOrCreatePlayerId(),
-          period: await currentPeriod(),
+          period,
           scope,
           name: await getOrCreatePlayerName(),
           country_code: await resolveCountryCode(),
@@ -195,47 +196,19 @@ export function createLeaderboardClient({
     invalidateCache();
   }
 
-  async function activateCurrentPeriod() {
-    if (activationScore === null || activationScore === undefined) {
-      return;
-    }
+  // Kept for source compatibility. Opening a board never creates a score.
+  async function activateCurrentPeriod() { await currentPeriod(); }
 
-    if (endpointUrl) {
-      await requestEndpointJson(
-        {},
-        {
-          method: "POST",
-          body: JSON.stringify({
-            countryCode: await resolveCountryCode(),
-            namespace,
-            playerId: getOrCreatePlayerId(),
-            playerName: await getOrCreatePlayerName(),
-            score: activationScore,
-            scope,
-          }),
-        },
-      );
-      invalidateCache();
-      return;
-    }
-
-    const rows = await requestList({
-      select: "player_id",
-      app_id: `eq.${namespace}`,
-      scope: `eq.${scope}`,
-      player_id: `eq.${getOrCreatePlayerId()}`,
-      period: `eq.${await currentPeriod()}`,
-      limit: "1",
-    });
-    if (rows.length === 0) await upsert(activationScore);
-  }
-
-  async function submitScore(totalScore) {
+  async function submitScore(totalScore, { completedAt = new Date().toISOString() } = {}) {
+    const playedMonth = new Date(completedAt).toISOString().slice(0, 7);
+    const period = await currentPeriod();
+    if (playedMonth !== period) throw new Error("Gameplay belongs to an expired ranking period.");
     if (!Number.isSafeInteger(totalScore) || totalScore < 0) {
       throw new Error("Score must be a non-negative integer.");
     }
     if (endpointUrl) {
-      await upsert(totalScore);
+      await upsert(totalScore, period);
+      rememberScore(period, totalScore);
       return;
     }
 
@@ -244,11 +217,12 @@ export function createLeaderboardClient({
       app_id: `eq.${namespace}`,
       scope: `eq.${scope}`,
       player_id: `eq.${getOrCreatePlayerId()}`,
-      period: `eq.${await currentPeriod()}`,
+      period: `eq.${period}`,
       limit: "1",
     });
     if (!isBetterScore(totalScore, rows[0]?.score, normalizedScoreOrder)) return;
-    await upsert(totalScore);
+    await upsert(totalScore, period);
+      rememberScore(period, totalScore);
   }
 
   async function updatePlayerName(rawName) {
@@ -274,35 +248,7 @@ export function createLeaderboardClient({
       return savedName;
     }
 
-    const rows = await requestList({
-      select: "player_id,name",
-      app_id: `eq.${namespace}`,
-      scope: `eq.${scope}`,
-      period: `eq.${await currentPeriod()}`,
-      name: `ilike.${name}`,
-      limit: "2",
-    });
-    if (rows.some((row) => row.player_id !== playerId)) {
-      throw new Error("That name is already taken.");
-    }
-
-    await activateCurrentPeriod();
-    await request(
-      tableUrl({
-        app_id: `eq.${namespace}`,
-        scope: `eq.${scope}`,
-        player_id: `eq.${playerId}`,
-        period: `eq.${await currentPeriod()}`,
-      }),
-      {
-        method: "PATCH",
-        headers: { Prefer: "return=minimal" },
-        body: JSON.stringify({
-          name,
-          updated_at: new Date().toISOString(),
-        }),
-      },
-    );
+    await rpc('leaderboard_rename', { p_player_id: playerId, p_name: name });
     storage.setItem(playerNameKey, name);
     invalidateCache();
     return name;
@@ -343,6 +289,7 @@ export function createLeaderboardClient({
       currentPlayer:
         ranked.find((row) => row.playerId === getOrCreatePlayerId()) ?? null,
     };
+    decorateSnapshot(snapshot, period);
     cache = { period, createdAt: Date.now(), snapshot };
     return snapshot;
   }
@@ -384,7 +331,33 @@ export function createLeaderboardClient({
           ? mapEntry(payload.playerEntry)
           : null,
     };
+    decorateSnapshot(snapshot, period);
     cache = { period, createdAt: Date.now(), snapshot };
+    return snapshot;
+  }
+
+  function personalRecord(period) {
+    const key = `${storagePrefix}.${getOrCreatePlayerId()}.personal.v1`;
+    const state = JSON.parse(storage.getItem(key) || 'null') || { period, current: null, previous: null };
+    if (state.period !== period) {
+      if (state.current !== null && isBetterScore(state.current, state.previous, normalizedScoreOrder)) state.previous = state.current;
+      state.current = null;
+      state.period = period;
+    }
+    return { key, state };
+  }
+  function rememberScore(period, score) {
+    const { key, state } = personalRecord(period);
+    if (isBetterScore(score, state.current, normalizedScoreOrder)) state.current = score;
+    storage.setItem(key, JSON.stringify(state));
+  }
+  function decorateSnapshot(snapshot, period) {
+    const { key, state } = personalRecord(period);
+    if (snapshot.currentPlayer && isBetterScore(snapshot.currentPlayer.score, state.current, normalizedScoreOrder)) state.current = snapshot.currentPlayer.score;
+    storage.setItem(key, JSON.stringify(state));
+    snapshot.previousScore = state.previous;
+    snapshot.showPrevious = !!snapshot.currentPlayer && state.previous !== null &&
+      isBetterScore(state.previous, snapshot.currentPlayer.score, normalizedScoreOrder);
     return snapshot;
   }
 

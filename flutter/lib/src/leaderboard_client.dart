@@ -104,46 +104,19 @@ class LeaderboardClient {
     return normalizeCountryCode(await config.countryCodeResolver?.call());
   }
 
-  Future<void> activateCurrentPeriod() async {
-    if (config.activationScore == null) return;
+  // Compatibility method: visiting a board must never submit an activation score.
+  Future<void> activateCurrentPeriod() async { await currentPeriod; }
 
-    if (config.usesEndpoint) {
-      await _requestEndpointJson(
-        method: 'POST',
-        body: {
-          'countryCode': await resolveCountryCode(),
-          'namespace': config.namespace,
-          'playerId': await getOrCreatePlayerId(),
-          'playerName': await getOrCreatePlayerName(),
-          'score': config.activationScore,
-          'scope': config.scope,
-        },
-      );
-      invalidateCache();
-      return;
-    }
-
-    final playerId = await getOrCreatePlayerId();
-    final rows = await _requestList(
-      _tableUri({
-        'select': 'player_id',
-        'app_id': 'eq.${config.namespace}',
-        'scope': 'eq.${config.scope}',
-        'player_id': 'eq.$playerId',
-        'period': 'eq.${await currentPeriod}',
-        'limit': '1',
-      }),
-    );
-    if (rows.isNotEmpty) return;
-    await _upsert(score: config.activationScore!);
-  }
-
-  Future<void> submitScore(int totalScore) async {
+  Future<void> submitScore(int totalScore, {DateTime? completedAt}) async {
+    final playedMonth = (completedAt ?? DateTime.now()).toUtc().toIso8601String().substring(0, 7);
+    final period = await currentPeriod;
+    if (playedMonth != period) throw const LeaderboardException('Gameplay belongs to an expired ranking period.');
     if (totalScore < 0) {
       throw const LeaderboardException('Score cannot be negative.');
     }
     if (config.usesEndpoint) {
-      await _upsert(score: totalScore);
+      await _upsert(score: totalScore, period: period);
+      await _rememberScore(period, totalScore);
       return;
     }
 
@@ -154,13 +127,14 @@ class LeaderboardClient {
         'app_id': 'eq.${config.namespace}',
         'scope': 'eq.${config.scope}',
         'player_id': 'eq.$playerId',
-        'period': 'eq.${await currentPeriod}',
+        'period': 'eq.$period',
         'limit': '1',
       }),
     );
     final previous = rows.isEmpty ? null : rows.first['score'] as num?;
     if (!config.isBetterScore(totalScore, previous)) return;
-    await _upsert(score: totalScore);
+    await _upsert(score: totalScore, period: period);
+    await _rememberScore(period, totalScore);
   }
 
   Future<String> updatePlayerName(String rawName) async {
@@ -189,38 +163,7 @@ class LeaderboardClient {
       return savedName;
     }
 
-    final rows = await _requestList(
-      _tableUri({
-        'select': 'player_id,name',
-        'app_id': 'eq.${config.namespace}',
-        'scope': 'eq.${config.scope}',
-        'period': 'eq.${await currentPeriod}',
-        'name': 'ilike.${_escapeFilter(name)}',
-        'limit': '2',
-      }),
-    );
-    final taken = rows.any((row) => row['player_id'] != playerId);
-    if (taken) {
-      throw const LeaderboardNameException('That name is already taken.');
-    }
-
-    await activateCurrentPeriod();
-    final response = await _httpClient
-        .patch(
-          _tableUri({
-            'app_id': 'eq.${config.namespace}',
-            'scope': 'eq.${config.scope}',
-            'player_id': 'eq.$playerId',
-            'period': 'eq.${await currentPeriod}',
-          }),
-          headers: {..._headers, 'Prefer': 'return=minimal'},
-          body: jsonEncode({
-            'name': name,
-            'updated_at': DateTime.now().toUtc().toIso8601String(),
-          }),
-        )
-        .timeout(config.requestTimeout);
-    _requireSuccess(response);
+    await _rpc('leaderboard_rename', {'p_player_id': playerId, 'p_name': name});
     await storage.write(_playerNameKey, name);
     invalidateCache();
     return name;
@@ -231,9 +174,10 @@ class LeaderboardClient {
       return _fetchEndpointSnapshot(forceRefresh: forceRefresh);
     }
 
+    final period = await currentPeriod;
     if (!forceRefresh &&
         _cachedSnapshot != null &&
-        _cachedPeriod == await currentPeriod &&
+        _cachedPeriod == period &&
         _cachedAt != null &&
         DateTime.now().difference(_cachedAt!) < config.cacheDuration) {
       return _cachedSnapshot!;
@@ -244,7 +188,7 @@ class LeaderboardClient {
         'select': 'player_id,name,score,country_code,updated_at',
         'app_id': 'eq.${config.namespace}',
         'scope': 'eq.${config.scope}',
-        'period': 'eq.${await currentPeriod}',
+        'period': 'eq.$period',
         'order':
             'score.${config.scoreOrder == LeaderboardScoreOrder.lower ? 'asc' : 'desc'},updated_at.desc',
         'limit': '${config.rankScanLimit}',
@@ -257,14 +201,38 @@ class LeaderboardClient {
     final playerId = await getOrCreatePlayerId();
     final current =
         ranked.where((entry) => entry.playerId == playerId).firstOrNull;
+    final personal = await _personalRecord(period);
     final snapshot = LeaderboardSnapshot(
       entries: ranked.take(config.topLimit).toList(growable: false),
       currentPlayer: current,
+      previousScore: personal['previous'] as int?,
+      showPrevious: current != null && personal['previous'] != null && config.isBetterScore(personal['previous'] as int, current.score),
     );
+    if (snapshot.currentPlayer != null) await _rememberScore(period, snapshot.currentPlayer!.score);
     _cachedSnapshot = snapshot;
     _cachedAt = DateTime.now();
-    _cachedPeriod = await currentPeriod;
+    _cachedPeriod = period;
     return snapshot;
+  }
+
+  Future<Map<String, dynamic>> _personalRecord(String period) async {
+    final key = '${config.namespace}.${config.scope}.${await getOrCreatePlayerId()}.personal.v1';
+    final raw = await storage.read(key);
+    final state = raw == null ? <String, dynamic>{'period': period, 'current': null, 'previous': null} : jsonDecode(raw) as Map<String, dynamic>;
+    if (state['period'] != period) {
+      if (state['current'] != null && config.isBetterScore(state['current'] as int, state['previous'] as num?)) state['previous'] = state['current'];
+      state['current'] = null;
+      state['period'] = period;
+    }
+    state['key'] = key;
+    await storage.write(key, jsonEncode(state));
+    return state;
+  }
+
+  Future<void> _rememberScore(String period, int score) async {
+    final state = await _personalRecord(period);
+    if (config.isBetterScore(score, state['current'] as num?)) state['current'] = score;
+    await storage.write(state['key'] as String, jsonEncode(state));
   }
 
   void invalidateCache() {
@@ -273,7 +241,7 @@ class LeaderboardClient {
     _cachedPeriod = null;
   }
 
-  Future<void> _upsert({required int score}) async {
+  Future<void> _upsert({required int score, required String period}) async {
     if (config.usesEndpoint) {
       await _requestEndpointJson(
         method: 'POST',
@@ -282,6 +250,7 @@ class LeaderboardClient {
           'namespace': config.namespace,
           'playerId': await getOrCreatePlayerId(),
           'playerName': await getOrCreatePlayerName(),
+          'period': period,
           'score': score,
           'scope': config.scope,
         },
@@ -304,7 +273,7 @@ class LeaderboardClient {
             'name': await getOrCreatePlayerName(),
             'country_code': await resolveCountryCode(),
             'score': score,
-            'period': await currentPeriod,
+            'period': period,
             'updated_at': DateTime.now().toUtc().toIso8601String(),
           }),
         )
@@ -356,9 +325,10 @@ class LeaderboardClient {
   Future<LeaderboardSnapshot> _fetchEndpointSnapshot({
     bool forceRefresh = false,
   }) async {
+    final period = await currentPeriod;
     if (!forceRefresh &&
         _cachedSnapshot != null &&
-        _cachedPeriod == await currentPeriod &&
+        _cachedPeriod == period &&
         _cachedAt != null &&
         DateTime.now().difference(_cachedAt!) < config.cacheDuration) {
       return _cachedSnapshot!;
@@ -386,13 +356,17 @@ class LeaderboardClient {
     final currentPlayer = currentJson is Map<String, dynamic>
         ? LeaderboardEntry.fromEndpointJson(currentJson)
         : null;
+    final personal = await _personalRecord(period);
     final snapshot = LeaderboardSnapshot(
       entries: entries,
       currentPlayer: currentPlayer,
+      previousScore: personal['previous'] as int?,
+      showPrevious: currentPlayer != null && personal['previous'] != null && config.isBetterScore(personal['previous'] as int, currentPlayer.score),
     );
+    if (snapshot.currentPlayer != null) await _rememberScore(period, snapshot.currentPlayer!.score);
     _cachedSnapshot = snapshot;
     _cachedAt = DateTime.now();
-    _cachedPeriod = await currentPeriod;
+    _cachedPeriod = period;
     return snapshot;
   }
 

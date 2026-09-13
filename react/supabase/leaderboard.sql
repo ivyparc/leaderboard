@@ -97,24 +97,17 @@ end $$;
 
 create or replace function public.leaderboard_period(p_app_id text, p_scope text)
 returns text language plpgsql security definer set search_path = public as $$
-declare b public.app_leaderboard_boards; m text := to_char(now() at time zone 'UTC','YYYY-MM');
+declare m text := to_char(now() at time zone 'UTC','YYYY-MM');
 begin
   insert into public.app_leaderboard_boards(app_id,scope,period)
-    values(p_app_id,p_scope,coalesce((select max(period) from public.app_leaderboard_scores
-      where app_id=p_app_id and scope=p_scope),m)) on conflict do nothing;
-  select * into b from public.app_leaderboard_boards
+    values(p_app_id,p_scope,m) on conflict do nothing;
+  perform 1 from public.app_leaderboard_boards
     where app_id=p_app_id and scope=p_scope for update;
-  if b.reset_at is not null and now() >= b.reset_at then
-    update public.app_leaderboard_boards set period=m,reset_at=null
-      where app_id=p_app_id and scope=p_scope returning * into b;
-  end if;
-  if b.reset_at is null and (select count(*) from public.app_leaderboard_scores
-      where app_id=p_app_id and scope=p_scope and period=b.period)>1000 then
-    update public.app_leaderboard_boards
-      set reset_at=(date_trunc('month',now() at time zone 'UTC')+interval '1 month') at time zone 'UTC'
-      where app_id=p_app_id and scope=p_scope;
-  end if;
-  return b.period;
+  delete from public.app_leaderboard_scores
+    where app_id=p_app_id and scope=p_scope and period<>m;
+  update public.app_leaderboard_boards set period=m,reset_at=null
+    where app_id=p_app_id and scope=p_scope;
+  return m;
 end $$;
 
 create or replace function public.leaderboard_name(p_app_id text,p_scope text,p_player_id uuid)
@@ -172,3 +165,33 @@ revoke all on function public.leaderboard_period(text,text) from public;
 revoke all on function public.leaderboard_name(text,text,uuid) from public;
 grant execute on function public.leaderboard_period(text,text) to anon,authenticated,service_role;
 grant execute on function public.leaderboard_name(text,text,uuid) to anon,authenticated,service_role;
+
+-- No score archive: remove expired scores during migration and via a monthly job.
+delete from public.app_leaderboard_scores
+where period <> to_char(now() at time zone 'UTC','YYYY-MM');
+drop policy if exists "leaderboard read" on public.app_leaderboard_scores;
+create policy "leaderboard read" on public.app_leaderboard_scores for select
+using (period = to_char(now() at time zone 'UTC','YYYY-MM'));
+
+create or replace function public.leaderboard_purge_expired()
+returns void language sql security definer set search_path=public as $$
+  delete from public.app_leaderboard_scores
+  where period <> to_char(now() at time zone 'UTC','YYYY-MM');
+$$;
+revoke all on function public.leaderboard_purge_expired() from public;
+grant execute on function public.leaderboard_purge_expired() to service_role;
+
+-- Rename the reservation even when the player has no score after reset.
+create or replace function public.leaderboard_rename(p_app_id text,p_scope text,p_player_id uuid,p_name text)
+returns text language plpgsql security definer set search_path=public as $$
+begin
+  if length(trim(p_name)) not between 1 and 32 then raise exception 'Invalid name'; end if;
+  perform public.leaderboard_period(p_app_id,p_scope);
+  insert into public.app_leaderboard_names values(p_app_id,p_scope,p_player_id,trim(p_name))
+    on conflict(app_id,scope,player_id) do update set name=excluded.name;
+  update public.app_leaderboard_scores set name=trim(p_name)
+    where app_id=p_app_id and scope=p_scope and player_id=p_player_id;
+  return trim(p_name);
+end $$;
+revoke all on function public.leaderboard_rename(text,text,uuid,text) from public;
+grant execute on function public.leaderboard_rename(text,text,uuid,text) to anon,authenticated,service_role;
